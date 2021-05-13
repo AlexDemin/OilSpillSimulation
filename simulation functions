@@ -1,0 +1,178 @@
+from PIL import Image
+import math
+from random import randrange
+import time
+import matplotlib.pyplot as plt
+import numpy as np
+%matplotlib inline
+from math import sqrt, exp
+
+#here are all colors we used in our maps to ease the understanding of it
+colors = {}
+colors['Albany'] = [163, 73, 164]
+colors['Greece islands'] = [181, 230, 29]
+colors['Greece'] = [171, 220, 19]
+colors['Macedonia'] = [185, 122, 87]
+colors['Bulgaria'] = [255, 201, 14]
+colors['Turkey islands'] = [237, 28, 36]
+colors['Turkey'] = [227, 18, 26]
+colors['lakes'] = [153, 217, 243]
+colors['sea'] = [153, 217, 243]
+colors['border'] = [183, 166, 243]
+colors['Cyprus'] = [249, 170, 53]
+colors['Italy'] = [255, 174, 201]
+colors['Italy islands'] = [146, 20, 31]
+colors['France'] = [255, 127, 39]
+colors['Algerian'] = [34, 177, 76]
+colors['Tunisian'] = [245, 242, 0]
+colors['Tunisian islands'] = [255, 252, 10]
+colors['Lybia'] = [200, 191, 231]
+colors['Egypt'] = [199, 243, 180]
+colors['Israeli'] = [242, 181, 233]
+colors['Palestine'] = [169, 248, 254]
+colors['Jordanian'] = [254, 216, 169]
+colors['Saudi Arabia'] = [241, 185, 182]
+colors['Lebanese'] = [70, 142, 68]
+colors['Syria'] = [208, 2, 147]
+colors['Montenegrin'] = [195, 195, 195]
+colors['Serbia'] = [205, 205, 205]
+colors['Montenegro'] = [195, 195, 195]
+
+colors['cold_earth'] = [254, 254, 233]
+set_of_colors = set(tuple(colors[i]) for i in colors.keys())
+
+
+#next 2 functions create dictionaries representing flows directions and velocities and oil spill amounts information from an image
+def flow_dict_make(name, soc):
+    flow_dict = {}
+    flows = np.asarray(Image.open(name).convert('RGB'))
+    for i in range(flows.shape[0]):
+        for j in range(flows.shape[1]):
+            if (not (tuple(flows[i][j]) in soc)) and flows[i][j][0] == flows[i][j][1]:
+                flow_dict[(i, j)] = (int(flows[i][j][0] / 10), 0.28 * flows[i][j][2] / 10)
+    return flow_dict
+
+def oil_dict_make(name, amount):
+    oil_dict = {}
+    oil = np.asarray(Image.open(name).convert('RGB'))
+    for i in range(oil.shape[0]):
+        for j in range(oil.shape[1]):
+            if oil[i][j][0] == 0 and oil[i][j][1] == 0:
+                oil_dict[(i, j)] = amount
+    return oil_dict
+
+good_direction = {1 : 1, 2 : 2, 3 : 3, 6 : 4, 9 : 5, 8 : 6, 7 : 7, 4 : 0}
+base_direction = {1 : 1, 2 : 2, 3 : 3, 4 : 6, 5 : 9, 6 : 8, 7 : 7, 0 : 4}
+def coef(move, add):
+    if (add == 5):
+        return 0
+    move = good_direction[move]
+    add = good_direction[add]
+    if (move == add):
+        return 1
+    elif (move == (add - 1) % 8 or move == (add + 1) % 8):
+        return sqrt(2)
+    elif (move == (add - 2) % 8 or move == (add + 2) % 8):
+        return 0
+    elif (move == (add - 3) % 8 or move == (add + 3) % 8):
+        return -sqrt(2)
+    else:
+        return -1
+
+#model_iter is 1 iteration of our model, which calculates new amount for every square area
+def model_iter(sea, oil, flows, winds, a, b, c, min_x, max_x, min_y, max_y):
+    oil_move = {}
+    new_oil = {}
+    directions = [(-1, -1, 1), (-1, 0, 2), (-1, 1, 3), (0, -1, 4), (0, 1, 6), (1, -1, 7), (1, 0, 8), (1, 1, 9)]
+    for i in range(min_y, max_y + 1):
+        for j in range(min_x, max_x + 1):
+            if ((i, j) in oil.keys()):
+                for x in range(-1, 2):
+                    for y in range(-1, 2):
+                        new_oil[(i + x, j + y)] = 0
+                oil_move[(i, j)] = np.zeros(10)
+                for k in range(1, 10):
+                    if (k != 5):
+                        summ = a
+                        if (i, j) in flows.keys():
+                            summ += b * flows[(i, j)][1] * coef(k, flows[(i, j)][0])
+                        if (i, j) in winds.keys():
+                            summ += c * winds[(i, j)][1] * coef(k, winds[(i, j)][0])
+                        oil_move[(i, j)][k] = oil[(i, j)] * exp(summ)
+                for direction in directions:
+                    #if tuple(sea[i+direction[0]][j+direction[1]]) != tuple(colors['sea']):
+                    if tuple(sea[i+direction[0]][j+direction[1]]) == tuple(colors['cold_earth']):
+                        oil_move[(i, j)][direction[2]] = 0
+                if (oil_move[(i, j)].sum() > oil[(i, j)]):
+                    oil_move[(i, j)] = oil_move[(i, j)] / (oil_move[(i, j)].sum() / oil[(i, j)])
+    for (i, j) in oil_move.keys():
+        for direction in directions:
+            #if tuple(sea[i+direction[0]][j+direction[1]]) == tuple(colors['sea']):
+            if tuple(sea[i+direction[0]][j+direction[1]]) != tuple(colors['cold_earth']):
+                new_oil[(i + direction[0], j + direction[1])] += oil_move[(i, j)][direction[2]]
+        new_oil[(i, j)] += oil[(i, j)] - oil_move[(i, j)].sum()
+    return new_oil
+
+#this function is the whole step of algorithm
+def whole_step(base_map, oil_dict, flow_dict, wind_dict, a = -1.0, b = 0.1, c = 0.1, weight = 0.86, make_pict = False, name = "", sea_color = colors['sea'], sea_mask = np.asarray(Image.open('Final/big_pol_map.bmp').convert('RGB')), hour = 0):
+    #at the beginning we bound the oil in a square to not use dictionary with polluted areas coordinates
+    max_x = 0
+    max_y = 0
+    min_x = base_map.shape[1] - 1
+    min_y = base_map.shape[0] - 1
+    for coord in oil_dict.keys():
+        if (max_x < coord[1]):
+            max_x = coord[1]
+        if (min_x > coord[1]):
+            min_x = coord[1]
+        if (max_y < coord[0]):
+            max_y = coord[0]
+        if (min_y > coord[0]):
+            min_y = coord[0]
+    #next step is to calculate the amount of distributed oil depending on its density and time 
+    k = 0.2
+    if weight > 0.87:
+        k = 0.4
+        if (hour < 24):
+            k = 0.4 + 0.3 * (24 - hour) / 24
+    old_oil = {}
+    for i in oil_dict.keys():
+        old_oil[i] = oil_dict[i] * k
+        oil_dict[i] = oil_dict[i] - old_oil[i]
+    new_oil_dict = model_iter(sea_mask, oil_dict, flow_dict, wind_dict, a, b, c, min_x, max_x, min_y, max_y)
+    #after 1 model iteration we calculate new fuel amounts
+    for i in old_oil.keys():
+        if i in new_oil_dict.keys():
+            new_oil_dict[i] += old_oil[i]
+        else:
+            new_oil_dict[i] = old_oil[i]
+    oil_dict = {}
+    for (i, j) in new_oil_dict.keys():
+        if new_oil_dict[(i, j)] != 0:
+            oil_dict[(i, j)] = round(new_oil_dict[(i, j)], 3)
+    new_oil_dict = oil_dict
+    #the last step is to create a picture if we want
+    if (make_pict):
+        img = base_map.copy()
+        max_oil = 0
+        for i in new_oil_dict.keys():
+            if new_oil_dict[i] > max_oil:
+                max_oil = new_oil_dict[i]
+        for (i, j) in new_oil_dict.keys():
+            if new_oil_dict[(i, j)] != 0:
+                if (new_oil_dict[(i, j)] <= 0.02):
+                    const = 0.1
+                elif (new_oil_dict[(i, j)] <= 0.05):
+                    const = 0.2
+                elif (new_oil_dict[(i, j)] <= 0.1):
+                    const = 0.4
+                elif (new_oil_dict[(i, j)] <= 0.3):
+                    const = 0.7
+                elif (new_oil_dict[(i, j)] <= 0.5):
+                    const = 0.9
+                else:
+                    const = 1
+                const = 1 - const
+                img[i][j] = [int(sea_color[0] * const), int(sea_color[1] * const), int(sea_color[2] * const)]
+        Image.fromarray(img.astype(np.uint8)).save(name + ".bmp")
+    return oil_dict
